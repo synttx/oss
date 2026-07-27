@@ -13,13 +13,12 @@ Unlike conventional cleanup tools like Janitor, Maid, or Trove, **Scythe** uses 
 - 🔄 **LIFO Cleanup Order**: Resources are disposed in reverse insertion order (Last-In, First-Out), matching resource acquisition semantics.
 - ♻️ **Pooled Handles**: Scope handles are recycled to maintain optimal memory and cache performance.
 
---
-
 ## Benchmarks
 
 Scythe consistently outperforms howmanysmall's Janitor across multiple metrics by about 25-30% in execution time.
 
-![](./assets/image.png)
+![](./assets/bench1.png)
+![](./assets/bench2.bmp)
 
 Memory Allocation & GC Pressure
 
