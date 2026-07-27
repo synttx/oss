@@ -13,7 +13,7 @@ Unlike conventional cleanup tools like [Janitor](https://github.com/howmanysmall
 
 ## Installation
 
-Copy [`src/scythe.luau`](src/scythe.luau) into your project and require it:
+Download and copy the latest release into your project and require it:
 
 ```luau
 local Scythe = require(path.to.Scythe)
