@@ -49,7 +49,7 @@
 		  They must NOT yield: a yield inside a disposer suspends the drain
 		  and exposes partially-cleaned state to other coroutines.
 
-	@version 1.1.0
+	@version 1.1.1
 	@author checcerr | fridayqx
 	@license MPL-2.0
 ]=]
@@ -626,7 +626,7 @@ function Scythe.destroy(scope: Scope): ()
 		releaseScope(id)
 	end
 
-	releaseScope(id)
+	-- releaseScope(id) die
 
 	if not ok then
 		error(err, 0)
