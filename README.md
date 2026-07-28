@@ -143,7 +143,7 @@ Click any benchmark below to view the script, visual benchmark results, architec
     - Scythe (`38 µs`) outperforms both Trove (`40 µs`) and Janitor (`44 µs`).
     - OOP libraries like Janitor and Trove require passing string method names (`"Disconnect"`) or wrapping connections, incurring string hash lookups and method sniffing. Scythe detects `RBXScriptConnection` automatically via `typeof()` at insertion time and stores `TAG_CONNECTION`, eliminating method strings and wrappers.
     - Maid (`22 µs`) blind-inserts connections into a dictionary and defers type checking until cleanup time.
-- **What It Means to the Developer**: Event connections are tracked faster and more cleanly in Scythe—you never need to pass `"Disconnect"` strings or wrapper objects.
+- **What It Means to the Developer**: Event connections are tracked faster and more cleanly in Scythe - you never need to pass `"Disconnect"` strings or wrapper objects.
 
 </details>
 
@@ -326,7 +326,7 @@ Scythe.destroy(scope) -- Disposes everything and recycles the scope handle
 | `clean`   | `(scope) → ()`             | Dispose all tracked values in LIFO order with error isolation. Scope remains valid and reusable.                |
 | `destroy` | `(scope) → ()`             | Dispose all tracked values, then recycle the handle back to the pool.                                           |
 | `isAlive` | `(scope: Scope) → boolean` | Return `true` if the handle is live, valid, and non-stale.                                                      |
-| `count`   | `(scope) → number`         | Return the number of live items. Single buffer read — effectively free.                                         |
+| `count`   | `(scope) → number`         | Return the number of live items. Single buffer read - effectively free.                                         |
 
 ### Supported Types
 
@@ -339,7 +339,7 @@ Scythe.destroy(scope) -- Disposes everything and recycles the scope handle
 | table or userdata with `:Destroy()`    | `:Destroy()`    |
 | table or userdata with `:Disconnect()` | `:Disconnect()` |
 
-Passing a value that matches none of the above will error — Scythe refuses to silently leak.
+Passing a value that matches none of the above will error - Scythe refuses to silently leak.
 
 ---
 
