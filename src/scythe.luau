@@ -96,38 +96,18 @@ local FLAG_LIVE = 1
 local FLAG_CLEANING = 2
 local FLAG_DESTROY_PENDING = 4
 
--- Upvalue caching :3
-local bufferCreate = buffer.create
-local bufferCopy = buffer.copy
-local readu32 = buffer.readu32
-local writeu32 = buffer.writeu32
-local readu8 = buffer.readu8
-local writeu8 = buffer.writeu8
-local tableCreate = table.create
-local tableClear = table.clear
-local coroutineStatus = coroutine.status
-local taskCancel = task.cancel
-local taskDefer = task.defer
-local typeofFn = typeof
-local rawequalFn = rawequal
-local pcallFn = pcall
-local btest = bit32.btest
-local bor = bit32.bor
-local band = bit32.band
-local bnot = bit32.bnot
-
 -- ============================== SoA storage ==============================
 
-local scopeItems = tableCreate(INITIAL_SCOPES) :: { { unknown } }
-local scopeTags = tableCreate(INITIAL_SCOPES) :: { buffer }
-local scopeLens: buffer = bufferCreate(INITIAL_SCOPES * 4)
-local scopeCaps: buffer = bufferCreate(INITIAL_SCOPES * 4)
-local scopeGens: buffer = bufferCreate(INITIAL_SCOPES * 4)
-local scopeFlags: buffer = bufferCreate(INITIAL_SCOPES)
+local scopeItems = table.create(INITIAL_SCOPES) :: { { unknown } }
+local scopeTags = table.create(INITIAL_SCOPES) :: { buffer }
+local scopeLens: buffer = buffer.create(INITIAL_SCOPES * 4)
+local scopeCaps: buffer = buffer.create(INITIAL_SCOPES * 4)
+local scopeGens: buffer = buffer.create(INITIAL_SCOPES * 4)
+local scopeFlags: buffer = buffer.create(INITIAL_SCOPES)
 local scopeCap = INITIAL_SCOPES
 local scopeCount = 0
 
-local freeStack: buffer = bufferCreate(INITIAL_SCOPES * 4)
+local freeStack: buffer = buffer.create(INITIAL_SCOPES * 4)
 local freeCap = INITIAL_SCOPES
 local freeLen = 0
 
@@ -139,15 +119,15 @@ local releaseScope: (id: number) -> ()
 
 -- Reallocate a u32 buffer to a larger element count, preserving contents.
 local function growU32(b: buffer, oldCount: number, newCount: number): buffer
-	local grown = bufferCreate(newCount * 4)
-	bufferCopy(grown, 0, b, 0, oldCount * 4)
+	local grown = buffer.create(newCount * 4)
+	buffer.copy(grown, 0, b, 0, oldCount * 4)
 	return grown
 end
 
 -- Reallocate a u8 buffer to a larger element count, preserving contents.
 local function growU8(b: buffer, oldCount: number, newCount: number): buffer
-	local grown = bufferCreate(newCount)
-	bufferCopy(grown, 0, b, 0, oldCount)
+	local grown = buffer.create(newCount)
+	buffer.copy(grown, 0, b, 0, oldCount)
 	return grown
 end
 
@@ -174,11 +154,11 @@ local function disposeOne(tag: number, value: any): ()
 	elseif tag == TAG_FUNCTION then
 		value()
 	elseif tag == TAG_THREAD then
-		local status = coroutineStatus(value)
+		local status = coroutine.status(value)
 		if status == "suspended" then
-			taskCancel(value)
+			task.cancel(value)
 		elseif status ~= "dead" then
-			taskDefer(taskCancel, value)
+			task.defer(task.cancel, value)
 		end
 	elseif tag == TAG_DESTROY then
 		value:Destroy()
@@ -187,18 +167,18 @@ local function disposeOne(tag: number, value: any): ()
 	elseif tag == TAG_SCOPE then
 		-- 1.1: Nesting scopes!
 		local childId = value % SCOPE_ID_SPACE
-		local childFlags = readu8(scopeFlags, childId)
+		local childFlags = buffer.readu8(scopeFlags, childId)
 
 		-- Fine, you can delete the child whenever, developer. Scythe will handle it. No need to worry about unlinking anything.
-		if btest(childFlags, FLAG_LIVE) and readu32(scopeGens, childId * 4) == (value - childId) // SCOPE_ID_SPACE then
-			if btest(childFlags, FLAG_CLEANING) then
-				if not btest(childFlags, FLAG_DESTROY_PENDING) then
-					writeu8(scopeFlags, childId, bor(childFlags, FLAG_DESTROY_PENDING))
+		if bit32.btest(childFlags, FLAG_LIVE) and buffer.readu32(scopeGens, childId * 4) == (value - childId) // SCOPE_ID_SPACE then
+			if bit32.btest(childFlags, FLAG_CLEANING) then
+				if not bit32.btest(childFlags, FLAG_DESTROY_PENDING) then
+					buffer.writeu8(scopeFlags, childId, bit32.bor(childFlags, FLAG_DESTROY_PENDING))
 				end
 			else
 				cleanScope(childId)
 
-				if readu8(scopeFlags, childId) ~= 0 then -- BE SAFE!
+				if buffer.readu8(scopeFlags, childId) ~= 0 then -- BE SAFE!
 					releaseScope(childId)
 				end
 			end
@@ -217,7 +197,7 @@ end
 @native
 local function resolve(handle: Scope, method: string): number
 	if type(handle) ~= "number" then
-		resolveError(method, `expected a Scope handle, got {typeofFn(handle)}`)
+		resolveError(method, `expected a Scope handle, got {typeof(handle)}`)
 	end
 
 	if handle ~= handle or handle < 0 or handle > MAX_HANDLE or handle % 1 ~= 0 then
@@ -231,12 +211,12 @@ local function resolve(handle: Scope, method: string): number
 		resolveError(method, `handle references scope #{id}, which was never allocated`)
 	end
 
-	local flags = readu8(scopeFlags, id)
-	if not btest(flags, FLAG_LIVE) then
+	local flags = buffer.readu8(scopeFlags, id)
+	if not bit32.btest(flags, FLAG_LIVE) then
 		resolveError(method, `scope #{id} has already been destroyed`)
 	end
 
-	if readu32(scopeGens, id * 4) ~= generation then
+	if buffer.readu32(scopeGens, id * 4) ~= generation then
 		resolveError(method, `stale handle - scope #{id} was destroyed and recycled`)
 	end
 
@@ -255,7 +235,7 @@ local function drainScope(id: number): ()
 	local guard = 0
 
 	while true do
-		local len = readu32(scopeLens, lenOffset)
+		local len = buffer.readu32(scopeLens, lenOffset)
 		if len == 0 then
 			break
 		end
@@ -272,14 +252,14 @@ local function drainScope(id: number): ()
 		local items = scopeItems[slot]
 		local tags = scopeTags[slot]
 		local value = items[len]
-		local tag = readu8(tags, len - 1)
+		local tag = buffer.readu8(tags, len - 1)
 
 		items[len] = nil
-		writeu32(scopeLens, lenOffset, len - 1)
+		buffer.writeu32(scopeLens, lenOffset, len - 1)
 
 		if value ~= nil then
 			if PROTECTED_DISPOSAL then
-				local ok, err = pcallFn(disposeOne :: any, tag, value) -- I couldn't figure this one out. I'm sorry.
+				local ok, err = pcall(disposeOne :: any, tag, value) -- I couldn't figure this one out. I'm sorry.
 				if not ok then
 					errorCount += 1
 					if firstError == nil then
@@ -305,23 +285,23 @@ end
 function releaseScope(id: number): ()
 	local slot = id + 1
 
-	if readu32(scopeLens, id * 4) ~= 0 then
-		tableClear(scopeItems[slot])
-		writeu32(scopeLens, id * 4, 0)
+	if buffer.readu32(scopeLens, id * 4) ~= 0 then
+		table.clear(scopeItems[slot])
+		buffer.writeu32(scopeLens, id * 4, 0)
 	end
 
-	local generation = readu32(scopeGens, id * 4) + 1
+	local generation = buffer.readu32(scopeGens, id * 4) + 1
 	if generation >= GEN_SPACE then
 		generation = 0
 	end
-	writeu32(scopeGens, id * 4, generation)
-	writeu8(scopeFlags, id, 0)
+	buffer.writeu32(scopeGens, id * 4, generation)
+	buffer.writeu8(scopeFlags, id, 0)
 
 	-- Give memory back after a spike; stay warm for ordinary churn.
-	if readu32(scopeCaps, id * 4) > SHRINK_THRESHOLD then
-		scopeItems[slot] = tableCreate(INITIAL_ITEMS)
-		scopeTags[slot] = bufferCreate(INITIAL_ITEMS)
-		writeu32(scopeCaps, id * 4, INITIAL_ITEMS)
+	if buffer.readu32(scopeCaps, id * 4) > SHRINK_THRESHOLD then
+		scopeItems[slot] = table.create(INITIAL_ITEMS)
+		scopeTags[slot] = buffer.create(INITIAL_ITEMS)
+		buffer.writeu32(scopeCaps, id * 4, INITIAL_ITEMS)
 	end
 
 	if freeLen >= freeCap then
@@ -333,30 +313,30 @@ function releaseScope(id: number): ()
 		freeCap = newCap
 	end
 
-	writeu32(freeStack, freeLen * 4, id)
+	buffer.writeu32(freeStack, freeLen * 4, id)
 	freeLen += 1
 end
 
 -- Drain a scope, guaranteeing the CLEANING flag is cleared and any deferred
 -- destroy is honoured, even when a disposer throws.
 function cleanScope(id: number): ()
-	local flags = readu8(scopeFlags, id)
-	local outermost = not btest(flags, FLAG_CLEANING)
+	local flags = buffer.readu8(scopeFlags, id)
+	local outermost = not bit32.btest(flags, FLAG_CLEANING)
 
 	if outermost then
-		writeu8(scopeFlags, id, bor(flags, FLAG_CLEANING))
+		buffer.writeu8(scopeFlags, id, bit32.bor(flags, FLAG_CLEANING))
 	end
 
-	local ok, err = pcallFn(drainScope :: any, id) -- I'm sorry. Again.
+	local ok, err = pcall(drainScope :: any, id) -- I'm sorry. Again.
 
 	if outermost then
-		local current = readu8(scopeFlags, id)
+		local current = buffer.readu8(scopeFlags, id)
 
-		if btest(current, FLAG_DESTROY_PENDING) then
-			writeu8(scopeFlags, id, FLAG_LIVE)
+		if bit32.btest(current, FLAG_DESTROY_PENDING) then
+			buffer.writeu8(scopeFlags, id, FLAG_LIVE)
 			releaseScope(id)
 		else
-			writeu8(scopeFlags, id, band(current, bnot(FLAG_CLEANING)))
+			buffer.writeu8(scopeFlags, id, bit32.band(current, bit32.bnot(FLAG_CLEANING)))
 		end
 	end
 
@@ -388,7 +368,7 @@ function Scythe.scope(): Scope
 	-- Fast path! :D
 	if freeLen > 0 then
 		freeLen -= 1
-		id = readu32(freeStack, freeLen * 4)
+		id = buffer.readu32(freeStack, freeLen * 4)
 	else
 		-- Slow path :(
 		if scopeCount >= scopeCap then
@@ -410,16 +390,16 @@ function Scythe.scope(): Scope
 		id = scopeCount
 		scopeCount += 1
 
-		scopeItems[id + 1] = tableCreate(INITIAL_ITEMS)
-		scopeTags[id + 1] = bufferCreate(INITIAL_ITEMS)
-		writeu32(scopeCaps, id * 4, INITIAL_ITEMS)
-		writeu32(scopeGens, id * 4, 0)
+		scopeItems[id + 1] = table.create(INITIAL_ITEMS)
+		scopeTags[id + 1] = buffer.create(INITIAL_ITEMS)
+		buffer.writeu32(scopeCaps, id * 4, INITIAL_ITEMS)
+		buffer.writeu32(scopeGens, id * 4, 0)
 	end
 
-	writeu32(scopeLens, id * 4, 0)
-	writeu8(scopeFlags, id, FLAG_LIVE)
+	buffer.writeu32(scopeLens, id * 4, 0)
+	buffer.writeu8(scopeFlags, id, FLAG_LIVE)
 
-	return id + readu32(scopeGens, id * 4) * SCOPE_ID_SPACE
+	return id + buffer.readu32(scopeGens, id * 4) * SCOPE_ID_SPACE
 end
 
 --[=[
@@ -461,12 +441,12 @@ function Scythe.add<T>(scope: Scope, value: T): T
 	local id = resolve(scope, "add")
 
 	local tag: number
-	local kind = typeofFn(value)
+	local kind = typeof(value)
 
 	if kind == "number" then
 		-- 1.1: Sub-Scope validation
 		local childId = (value :: any) % SCOPE_ID_SPACE
-		if childId < scopeCount and btest(readu8(scopeFlags, childId), FLAG_LIVE) and readu32(scopeGens, childId * 4) == ((value :: any) - childId) // SCOPE_ID_SPACE then
+		if childId < scopeCount and bit32.btest(buffer.readu8(scopeFlags, childId), FLAG_LIVE) and buffer.readu32(scopeGens, childId * 4) == ((value :: any) - childId) // SCOPE_ID_SPACE then
 			if value == scope then
 				error(`Scythe.add: cannot add a scope to itself`, 2)
 			end
@@ -495,8 +475,8 @@ function Scythe.add<T>(scope: Scope, value: T): T
 	local slot = id + 1
 	local items = scopeItems[slot]
 	local tags = scopeTags[slot]
-	local len = readu32(scopeLens, id * 4)
-	local cap = readu32(scopeCaps, id * 4)
+	local len = buffer.readu32(scopeLens, id * 4)
+	local cap = buffer.readu32(scopeCaps, id * 4)
 
 	if len >= cap then
 		if cap >= MAX_ITEMS_PER_SCOPE then
@@ -508,16 +488,16 @@ function Scythe.add<T>(scope: Scope, value: T): T
 			newCap = MAX_ITEMS_PER_SCOPE
 		end
 
-		local grown = bufferCreate(newCap)
-		bufferCopy(grown, 0, tags, 0, cap)
+		local grown = buffer.create(newCap)
+		buffer.copy(grown, 0, tags, 0, cap)
 		scopeTags[slot] = grown
 		tags = grown
-		writeu32(scopeCaps, id * 4, newCap)
+		buffer.writeu32(scopeCaps, id * 4, newCap)
 	end
 
 	items[len + 1] = value
-	writeu8(tags, len, tag)
-	writeu32(scopeLens, id * 4, len + 1)
+	buffer.writeu8(tags, len, tag)
+	buffer.writeu32(scopeLens, id * 4, len + 1)
 
 	return value
 end
@@ -552,15 +532,15 @@ function Scythe.remove(scope: Scope, value: unknown): boolean
 	local slot = id + 1
 	local items = scopeItems[slot]
 	local tags = scopeTags[slot]
-	local len = readu32(scopeLens, id * 4)
+	local len = buffer.readu32(scopeLens, id * 4)
 
 	for i = len, 1, -1 do
-		if rawequalFn(items[i], value) then
+		if rawequal(items[i], value) then
 			-- O(1) go brrr
 			items[i] = items[len]
 			items[len] = nil
-			writeu8(tags, i - 1, readu8(tags, len - 1))
-			writeu32(scopeLens, id * 4, len - 1)
+			buffer.writeu8(tags, i - 1, buffer.readu8(tags, len - 1))
+			buffer.writeu32(scopeLens, id * 4, len - 1)
 			return true
 		end
 	end
@@ -608,21 +588,21 @@ end
 ]=]
 function Scythe.destroy(scope: Scope): ()
 	local id = resolve(scope, "destroy")
-	local flags = readu8(scopeFlags, id)
+	local flags = buffer.readu8(scopeFlags, id)
 
-	if btest(flags, FLAG_CLEANING) then
+	if bit32.btest(flags, FLAG_CLEANING) then
 		-- Re-entrant destroy: defer the recycle so the slot cannot be
 		-- reissued and repopulated while the outer drain is still running.
-		if not btest(flags, FLAG_DESTROY_PENDING) then
-			writeu8(scopeFlags, id, bor(flags, FLAG_DESTROY_PENDING))
+		if not bit32.btest(flags, FLAG_DESTROY_PENDING) then
+			buffer.writeu8(scopeFlags, id, bit32.bor(flags, FLAG_DESTROY_PENDING))
 		end
 		return
 	end
 
-	local ok, err = pcallFn(cleanScope :: any, id) -- Please forgive me. I didn't mean it. :(
+	local ok, err = pcall(cleanScope :: any, id) -- Please forgive me. I didn't mean it. :(
 
 	-- don't release anything twice :(
-	if readu8(scopeFlags, id) ~= 0 then
+	if buffer.readu8(scopeFlags, id) ~= 0 then
 		releaseScope(id)
 	end
 
@@ -647,7 +627,7 @@ end
 ]=]
 @native
 function Scythe.count(scope: Scope): number
-	return readu32(scopeLens, resolve(scope, "count") * 4)
+	return buffer.readu32(scopeLens, resolve(scope, "count") * 4)
 end
 
 --[=[
@@ -678,11 +658,11 @@ function Scythe.isAlive(scope: Scope): boolean
 		return false
 	end
 
-	if not btest(readu8(scopeFlags, id), FLAG_LIVE) then
+	if not bit32.btest(buffer.readu8(scopeFlags, id), FLAG_LIVE) then
 		return false
 	end
 
-	return readu32(scopeGens, id * 4) == (scope - id) // SCOPE_ID_SPACE
+	return buffer.readu32(scopeGens, id * 4) == (scope - id) // SCOPE_ID_SPACE
 end
 
 table.freeze(Scythe)

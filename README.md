@@ -14,6 +14,7 @@ Unlike conventional cleanup tools like [Janitor](https://github.com/howmanysmall
 ## Installation
 
 ### Via Wally
+
 Add **Scythe** to your `wally.toml` dependencies:
 
 ```toml
@@ -22,11 +23,13 @@ Scythe = "synttx/scythe@1.1.1"
 ```
 
 Then run:
+
 ```bash
 wally install
 ```
 
 ### Manual Installation
+
 Download and copy the latest release module into your project:
 
 ```luau
