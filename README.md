@@ -1,6 +1,6 @@
 # Scythe 🔪🩸
 
-[![Version](https://img.shields.io/badge/version-1.1.0-E11D48?style=for-the-badge&logo=github&logoColor=white)](https://github.com/synttx/scythe/releases)
+[![Version](https://img.shields.io/badge/version-1.1.2-E11D48?style=for-the-badge&logo=github&logoColor=white)](https://github.com/synttx/scythe/releases)
 [![License](https://img.shields.io/badge/license-MPL--2.0-3B82F6?style=for-the-badge&logo=mozilla&logoColor=white)](LICENSE)
 [![Luau](https://img.shields.io/badge/language-Luau-8B5CF6?style=for-the-badge&logo=luau&logoColor=white)](https://luau-lang.org)
 [![Dependencies](https://img.shields.io/badge/dependencies-zero-00A2FF?style=for-the-badge&logo=roblox&logoColor=white)]()
