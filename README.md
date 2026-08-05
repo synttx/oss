@@ -388,6 +388,6 @@ freeStack  : buffer         -- u32 recycled handle stack
 
 ## Metadata
 
-- **Version**: `1.1.1`
+- **Version**: `1.2`
 - **Author**: `checcerr` | `fridayqx`
 - **License**: [Mozilla Public License 2.0 (MPL-2.0)](LICENSE)
