@@ -188,9 +188,55 @@ local function disposeOne(tag: number, value: any): ()
 	end
 end
 
+-- Resolve the disposal tag for a value, exactly once, at add-time.
+-- Errors at level 3 so the blame lands on the caller of the public function.
+@native
+local function resolveTag(value: unknown, scope: Scope, method: string): number
+	local kind = typeof(value)
+
+	if kind == "number" then
+		local handle = value :: number
+
+		-- 1.1: Sub-Scope validation. Integer-guard BEFORE the modulo, otherwise
+		-- a fractional number reaches buffer.readu8 and throws a garbage error.
+		if handle == handle and handle >= 0 and handle <= MAX_HANDLE and handle % 1 == 0 then
+			local childId = handle % SCOPE_ID_SPACE
+
+			if
+				childId < scopeCount
+				and bit32.btest(buffer.readu8(scopeFlags, childId), FLAG_LIVE)
+				and buffer.readu32(scopeGens, childId * 4) == (handle - childId) // SCOPE_ID_SPACE
+			then
+				if handle == scope then
+					error(`Scythe.{method}: cannot add a scope to itself`, 3)
+				end
+				return TAG_SCOPE
+			end
+		end
+
+		error(`Scythe.{method}: cannot clean this number (not a valid, alive scope handle)`, 3)
+	elseif kind == "RBXScriptConnection" then
+		return TAG_CONNECTION
+	elseif kind == "Instance" then
+		return TAG_INSTANCE
+	elseif kind == "function" then
+		return TAG_FUNCTION
+	elseif kind == "thread" then
+		return TAG_THREAD
+	elseif kind == "table" or kind == "userdata" then
+		local resolved, reason = resolveMemberTag(value :: any)
+		if resolved == nil then
+			error(`Scythe.{method}: cannot clean this {kind} - {reason}`, 3)
+		end
+		return resolved :: number
+	end
+
+	error(`Scythe.{method}: cannot clean a value of type '{kind}'`, 3)
+end
+
 -- Small optimization teehee
 local function resolveError(method: string, msg: string): never
-	error(`Scythe.{method}: {msg}`, 3)
+	error(`Scythe.{method}: {msg}`, 4)
 end
 
 -- Decode + validate a public handle into an internal slot id.
@@ -440,37 +486,7 @@ end
 function Scythe.add<T>(scope: Scope, value: T): T
 	local id = resolve(scope, "add")
 
-	local tag: number
-	local kind = typeof(value)
-
-	if kind == "number" then
-		-- 1.1: Sub-Scope validation
-		local childId = (value :: any) % SCOPE_ID_SPACE
-		if childId < scopeCount and bit32.btest(buffer.readu8(scopeFlags, childId), FLAG_LIVE) and buffer.readu32(scopeGens, childId * 4) == ((value :: any) - childId) // SCOPE_ID_SPACE then
-			if value == scope then
-				error(`Scythe.add: cannot add a scope to itself`, 2)
-			end
-			tag = TAG_SCOPE
-		else
-			error(`Scythe.add: cannot clean this number (not a valid, alive scope handle)`, 2)
-		end
-	elseif kind == "RBXScriptConnection" then
-		tag = TAG_CONNECTION
-	elseif kind == "Instance" then
-		tag = TAG_INSTANCE
-	elseif kind == "function" then
-		tag = TAG_FUNCTION
-	elseif kind == "thread" then
-		tag = TAG_THREAD
-	elseif kind == "table" or kind == "userdata" then
-		local resolved, reason = resolveMemberTag(value :: any)
-		if resolved == nil then
-			error(`Scythe.add: cannot clean this {kind} - {reason}`, 2)
-		end
-		tag = resolved :: number
-	else
-		error(`Scythe.add: cannot clean a value of type '{kind}'`, 2)
-	end
+	local tag = resolveTag(value, scope, "add")
 
 	local slot = id + 1
 	local items = scopeItems[slot]
@@ -500,6 +516,81 @@ function Scythe.add<T>(scope: Scope, value: T): T
 	buffer.writeu32(scopeLens, id * 4, len + 1)
 
 	return value
+end
+
+--[=[
+	Adds many values to a scope in one call. Returns NOTHING - no pack, no
+	table, no allocation:
+
+	```lua
+	Scythe.addBulk(scope, part, conn, thread, function() print("bye") end)
+	```
+
+	Identical semantics to `add` per value (same tag table, same LIFO
+	disposal - later arguments are disposed first), with two differences:
+
+	* The tag buffer is grown ONCE for the whole batch instead of doubling
+	  per item.
+	* It is atomic. Tags are resolved into the unused region above the live
+	  length first, so if ANY value has no cleanup path the scope is left
+	  untouched and nothing is half-tracked.
+
+	`nil` is not a cleanable value, so holes in the argument list throw.
+	Safe to call from inside a disposer; the batch lands on top of the stack
+	and is drained by the in-flight clean.
+
+	@param scope Scope -- handle from `Scythe.scope()`
+	@param ... unknown -- resources to track
+]=]
+@native
+function Scythe.addBulk(scope: Scope, ...: unknown): ()
+	local id = resolve(scope, "addBulk")
+
+	local n = select("#", ...)
+	if n == 0 then
+		return
+	end
+
+	local slot = id + 1
+	local len = buffer.readu32(scopeLens, id * 4)
+	local cap = buffer.readu32(scopeCaps, id * 4)
+	local needed = len + n
+
+	if needed > MAX_ITEMS_PER_SCOPE then
+		error(`Scythe.addBulk: scope #{id} hit the item limit ({MAX_ITEMS_PER_SCOPE})`, 2)
+	end
+
+	local tags = scopeTags[slot]
+
+	if needed > cap then
+		local newCap = cap
+		repeat
+			newCap *= 2
+		until newCap >= needed
+
+		if newCap > MAX_ITEMS_PER_SCOPE then
+			newCap = MAX_ITEMS_PER_SCOPE
+		end
+
+		local grown = buffer.create(newCap)
+		buffer.copy(grown, 0, tags, 0, cap)
+		scopeTags[slot] = grown
+		tags = grown
+		buffer.writeu32(scopeCaps, id * 4, newCap)
+	end
+
+	-- Pass 1: resolve every tag into scratch space above the live length.
+	-- A throw here leaves scopeLens untouched, so the batch never happened.
+	for i = 1, n do
+		buffer.writeu8(tags, len + i - 1, resolveTag(select(i, ...), scope, "addBulk"))
+	end
+
+	-- Pass 2: commit. No failure paths left.
+	local items = scopeItems[slot]
+	for i = 1, n do
+		items[len + i] = select(i, ...)
+	end
+	buffer.writeu32(scopeLens, id * 4, needed)
 end
 
 --[=[

@@ -13,14 +13,22 @@
     - Janitor (by howmanysmall)
     - Maid (by Quenty)
     - Trove (by sleitnick)
+    - create-scope (by sap0bombado)
 
     Note: Run this script in the Roblox Studio Command Bar.
 ]]
 
+local RUN_SCYTHE = true
+local RUN_CREATE_SCOPE = true
+local RUN_JANITOR = false
+local RUN_MAID = false
+local RUN_TROVE = false
+
 local Scythe = require('../src/scythe.luau')
-local Janitor = require('path to howmanysmall`s Janitor')
-local Maid = require('path to Quenty`s Maid')
-local Trove = require('path to sleitnick`s Trove')
+local CreateScope = RUN_CREATE_SCOPE and require('path to sap0bombado`s create-scope') or nil
+local Janitor = RUN_JANITOR and require('path to howmanysmall`s Janitor') or nil
+local Maid = RUN_MAID and require('path to Quenty`s Maid') or nil
+local Trove = RUN_TROVE and require('path to sleitnick`s Trove') or nil
 
 local function dummyTask() end
 
@@ -88,68 +96,116 @@ print("Studio will freeze for a moment during calculations...\n")
 
 -- --- PHASE 1: COLD START ---
 printHeader("PHASE 1: COLD ACTIVE FOOTPRINT (Fresh Memory)")
+if RUN_MAID then
 runActiveTest("Maid",
 	function() local m = Maid.new(); m:GiveTask(dummyTask); return m end,
 	function(m) m:Destroy() end
 )
+end
+if RUN_TROVE then
 runActiveTest("Trove",
 	function() local t = Trove.new(); t:Add(dummyTask); return t end,
 	function(t) t:Destroy() end
 )
+end
+if RUN_JANITOR then
 runActiveTest("Janitor",
 	function() local j = Janitor.new(); j:Add(dummyTask); return j end,
 	function(j) j:Destroy() end
 )
+end
+if RUN_SCYTHE then
 runActiveTest("Scythe",
 	function() local s = Scythe.scope(); Scythe.add(s, dummyTask); return s end,
 	function(s) Scythe.destroy(s) end
 )
+end
+
+if RUN_CREATE_SCOPE then
+	runActiveTest("CreateScope",
+		function() local s = CreateScope(); s(dummyTask); return s end,
+		function(s) s() end
+	)
+end
+
 
 
 -- --- PHASE 2: WARM START ---
 printHeader("PHASE 2: WARM ACTIVE FOOTPRINT (Reused Memory)")
+if RUN_MAID then
 runActiveTest("Maid",
 	function() local m = Maid.new(); m:GiveTask(dummyTask); return m end,
 	function(m) m:Destroy() end
 )
+end
+if RUN_TROVE then
 runActiveTest("Trove",
 	function() local t = Trove.new(); t:Add(dummyTask); return t end,
 	function(t) t:Destroy() end
 )
+end
+if RUN_JANITOR then
 runActiveTest("Janitor",
 	function() local j = Janitor.new(); j:Add(dummyTask); return j end,
 	function(j) j:Destroy() end
 )
+end
+if RUN_SCYTHE then
 runActiveTest("Scythe",
 	function() local s = Scythe.scope(); Scythe.add(s, dummyTask); return s end,
 	function(s) Scythe.destroy(s) end
 )
+end
+
+if RUN_CREATE_SCOPE then
+	runActiveTest("CreateScope",
+		function() local s = CreateScope(); s(dummyTask); return s end,
+		function(s) s() end
+	)
+end
+
 
 -- --- PHASE 3: GARBAGE COLLECTION ---
 printHeader("PHASE 3: STEADY-STATE GARBAGE GENERATION (1 Million Cycles)")
+if RUN_MAID then
 runGCTest("Maid", function()
 	local m = Maid.new()
 	m:GiveTask(dummyTask)
 	m:Destroy()
 end)
+end
 
+if RUN_TROVE then
 runGCTest("Trove", function()
 	local t = Trove.new()
 	t:Add(dummyTask)
 	t:Destroy()
 end)
+end
 
 
+if RUN_JANITOR then
 runGCTest("Janitor", function()
 	local j = Janitor.new()
 	j:Add(dummyTask)
 	j:Destroy()
 end)
+end
 
+if RUN_SCYTHE then
 runGCTest("Scythe", function()
 	local s = Scythe.scope()
 	Scythe.add(s, dummyTask)
 	Scythe.destroy(s)
 end)
+end
+
+if RUN_CREATE_SCOPE then
+	runGCTest("CreateScope", function()
+		local s = CreateScope()
+		s(dummyTask)
+		s()
+	end)
+end
 
 print("\nBenchmark Complete! 🚀")

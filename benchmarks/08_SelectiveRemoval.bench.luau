@@ -12,15 +12,20 @@
     - Scythe (by checcerr | fridayqx)
     - Janitor (by howmanysmall)
     - Trove (by sleitnick)
+    - create-scope (by sap0bombado)
 
-    Quenty's Maid is excluded because it does not support untracking arbitrary object references without disposing them; setting maid[key] = nil immediately executes cleanup on the task.
+    Quenty's Maid and sap0bombado's create-scope are excluded because they do not support untracking arbitrary object references without disposing them (e.g. setting maid[key] = nil immediately executes cleanup, and create-scope doesn't expose a removal method at all).
 
     Note: Run this benchmark with boatbomber's Benchmarker or bitsplicer's Scriptbench plugins.
 ]]
 
+local RUN_SCYTHE = true
+local RUN_JANITOR = false
+local RUN_TROVE = false
+
 local Scythe = require('../src/scythe.luau')
-local Janitor = require('path to howmanysmall`s Janitor')
-local Trove = require('path to sleitnick`s Trove')
+local Janitor = RUN_JANITOR and require('path to howmanysmall`s Janitor') or nil
+local Trove = RUN_TROVE and require('path to sleitnick`s Trove') or nil
 
 local function createMockConnection()
 	return {
@@ -37,7 +42,7 @@ return {
 	end,
 
 	Functions = {
-		["Scythe"] = function(_Profiler, _Count: number)
+		["Scythe"] = if RUN_SCYTHE then function(_Profiler, _Count: number)
 			local scope = Scythe.scope()
 			local items = {}
 			for i = 1, 500 do
@@ -49,9 +54,9 @@ return {
 				Scythe.remove(scope, items[i])
 			end
 			Scythe.destroy(scope)
-		end,
+		end else nil,
 
-		["Janitor"] = function(_Profiler, _Count: number)
+		["Janitor"] = if RUN_JANITOR then function(_Profiler, _Count: number)
 			local jan = Janitor.new()
 			local items = {}
 			for i = 1, 500 do
@@ -63,9 +68,9 @@ return {
 				jan:RemoveNoClean(i)
 			end
 			jan:Destroy()
-		end,
+		end else nil,
 
-		["Trove"] = function(_Profiler, _Count: number)
+		["Trove"] = if RUN_TROVE then function(_Profiler, _Count: number)
 			local trove = Trove.new()
 			local items = {}
 			for i = 1, 500 do
@@ -77,6 +82,6 @@ return {
 				trove:Remove(items[i])
 			end
 			trove:Destroy()
-		end,
+		end else nil,
 	},
 }
