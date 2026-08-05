@@ -20,7 +20,7 @@
 
 
 local RUN_SCYTHE = true
-local RUN_CREATE_SCOPE = true
+local RUN_CREATE_SCOPE = false
 local RUN_JANITOR = false
 local RUN_MAID = false
 local RUN_TROVE = false

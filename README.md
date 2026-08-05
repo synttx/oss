@@ -3,7 +3,7 @@
 [![Version](https://img.shields.io/badge/version-1.1.2-E11D48?style=for-the-badge&logo=github&logoColor=white)](https://github.com/synttx/scythe/releases)
 [![License](https://img.shields.io/badge/license-MPL--2.0-3B82F6?style=for-the-badge&logo=mozilla&logoColor=white)](LICENSE)
 [![Luau](https://img.shields.io/badge/language-Luau-8B5CF6?style=for-the-badge&logo=luau&logoColor=white)](https://luau-lang.org)
-[![Dependencies](https://img.shields.io/badge/dependencies-zero-00A2FF?style=for-the-badge&logo=roblox&logoColor=white)]()
+[![Dependencies](https://img.shields.io/badge/dependencies-zero-00A2FF?style=for-the-badge&logo=roblox&logoColor=white)](<>)
 
 A data-oriented cleanup library for Roblox Luau.
 
@@ -316,6 +316,9 @@ Scythe.add(scope, customObject)                    -- table/userdata w/ :Destroy
 local part = Scythe.add(scope, Instance.new("Part"))
 local conn = Scythe.add(scope, signal:Connect(handler))
 
+-- Track multiple resources atomically in one call:
+Scythe.addBulk(scope, part, conn, thread, function() print("bye") end)
+
 -- Remove a value without disposing it (ownership transfer):
 Scythe.remove(scope, conn)
 
@@ -335,15 +338,16 @@ Scythe.destroy(scope) -- Disposes everything and recycles the scope handle
 
 ## API Reference
 
-| Function  | Signature                  | Description                                                                                                     |
-| --------- | -------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `scope`   | `() → Scope`               | Acquire a cleanup scope. Recycled handles are reused with warm capacity.                                        |
-| `add`     | `(scope, value: T) → T`    | Track a value for cleanup. Disposal method is resolved once at add-time. Returns the value for inline chaining. |
-| `remove`  | `(scope, value) → boolean` | Untrack a value via O(1) `rawequal` swap-removal without disposing it. Returns `true` if found.                 |
-| `clean`   | `(scope) → ()`             | Dispose all tracked values in LIFO order with error isolation. Scope remains valid and reusable.                |
-| `destroy` | `(scope) → ()`             | Dispose all tracked values, then recycle the handle back to the pool.                                           |
-| `isAlive` | `(scope: Scope) → boolean` | Return `true` if the handle is live, valid, and non-stale.                                                      |
-| `count`   | `(scope) → number`         | Return the number of live items. Single buffer read - effectively free.                                         |
+| Function  | Signature                    | Description                                                                                                     |
+| --------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `scope`   | `() → Scope`                 | Acquire a cleanup scope. Recycled handles are reused with warm capacity.                                        |
+| `add`     | `(scope, value: T) → T`      | Track a value for cleanup. Disposal method is resolved once at add-time. Returns the value for inline chaining. |
+| `addBulk` | `(scope, ...: unknown) → ()` | Track multiple values atomically in a single call with zero extra allocations and single capacity expansion.    |
+| `remove`  | `(scope, value) → boolean`   | Untrack a value via O(1) `rawequal` swap-removal without disposing it. Returns `true` if found.                 |
+| `clean`   | `(scope) → ()`               | Dispose all tracked values in LIFO order with error isolation. Scope remains valid and reusable.                |
+| `destroy` | `(scope) → ()`               | Dispose all tracked values, then recycle the handle back to the pool.                                           |
+| `isAlive` | `(scope: Scope) → boolean`   | Return `true` if the handle is live, valid, and non-stale.                                                      |
+| `count`   | `(scope) → number`           | Return the number of live items. Single buffer read - effectively free.                                         |
 
 ### Supported Types
 

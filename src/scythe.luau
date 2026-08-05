@@ -34,6 +34,8 @@
 		Scythe.add(scope, task.spawn(loop))              -- task.cancel()
 		Scythe.add(scope, function() print("bye") end)   -- called
 
+		Scythe.addBulk(scope, part2, conn2, thread2)     -- Track multiple items in one atomic call
+
 		local subScope = Scythe.scope()
 		Scythe.add(scope, subScope)                      -- Sub-scope linked!
 
@@ -49,7 +51,7 @@
 		  They must NOT yield: a yield inside a disposer suspends the drain
 		  and exposes partially-cleaned state to other coroutines.
 
-	@version 1.1.1
+	@version 1.2
 	@author checcerr | fridayqx
 	@license MPL-2.0
 ]=]

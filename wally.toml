@@ -1,6 +1,6 @@
 [package]
 name = "synttx/scythe"
-version = "1.1.2"
+version = "1.2"
 description = "A Data-Oriented Cleanup Library · Up to ×17 lighter than other maids"
 authors = ["synttx <synttx@proton.me>"]
 realm = "shared"
@@ -10,6 +10,7 @@ repository = "https://github.com/synttx/scythe"
 exclude = [
     "assets",
     "benchmarks",
+    "temp"
 ]
 
 [dependencies]
