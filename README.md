@@ -16,7 +16,7 @@ A data-oriented cleanup library for Roblox Luau.
 - **Ultra-Lightweight**: Uses simple integer handles instead of objects, costing only 16 bytes per scope.
 - **Bug-Proof**: Generation-tagged handles prevent double-destroys and memory leaks.
 
-### [Vow 🤝📜](./packages/vow)
+### [Vow 🤝📜](./packages/vow) _**[NEW!]**_
 
 A data-oriented, procedural Promise/Future library for Roblox Luau.
 
