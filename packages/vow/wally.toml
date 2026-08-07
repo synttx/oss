@@ -1,12 +1,13 @@
 [package]
 name = "synttx/vow"
-version = "1.0.0"
+version = "1.0.1"
 description = "A Data-Oriented Procedural Promise/Future Library · ×6 faster. ×32 lighter. ×∞ less garbage."
 authors = ["synttx <synttx@proton.me>"]
 realm = "shared"
 license = "MPL-2.0"
 registry = "https://github.com/UpliftGames/wally-index"
-repository = "https://github.com/synttx/scythe"
+repository = "https://github.com/synttx/oss/tree/main/vow"
+keywords = ["promise", "future", "async", "await", "task"]
 exclude = [
     "assets",
     "benchmarks",
