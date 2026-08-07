@@ -1,6 +1,13 @@
 {
-    "name": "Scythe",
+    "name": "oss",
     "tree": {
-        "$path": "src/scythe.luau"
+        "packages": {
+            "scythe": {
+                "$path": "packages/scythe"
+            },
+            "vow": {
+                "$path": "packages/vow"
+            }
+        }
     }
 }

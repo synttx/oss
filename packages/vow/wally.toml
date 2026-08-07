@@ -1,7 +1,7 @@
 [package]
-name = "synttx/scythe"
-version = "1.2.0"
-description = "A Data-Oriented Cleanup Library · Up to ×17 lighter than other maids"
+name = "synttx/vow"
+version = "1.0.0"
+description = "A Data-Oriented Procedural Promise/Future Library · ×6 faster. ×32 lighter. ×∞ less garbage."
 authors = ["synttx <synttx@proton.me>"]
 realm = "shared"
 license = "MPL-2.0"
@@ -10,7 +10,6 @@ repository = "https://github.com/synttx/scythe"
 exclude = [
     "assets",
     "benchmarks",
-    "temp"
 ]
 
 [dependencies]
