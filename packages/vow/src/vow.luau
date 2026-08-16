@@ -6,9 +6,9 @@
 
 	@desc A data-oriented, procedural Promise/Future library for Luau.
 
-	Vow has no objects, metatables, per-instance tables, resolve closures,
-	or varargs. A Vow is a generation-tagged integer handle backed by
-	module-level Structure-of-Arrays storage.
+	Vow has no objects, metatables, resolve closures, or varargs. A Vow is a
+	generation-tagged integer handle backed by module-level Structure-of-Arrays
+	storage.
 
 	Each Vow stores one state, one value, and an intrusive listener list.
 	Listener nodes are pooled globally and linked through parallel arrays.
@@ -35,12 +35,14 @@
 		* Every Vow resolves or rejects with exactly one value.
 		* Vow.resolve adopts another live Vow passed as its value. So does a
 		  value returned from an andThen fulfillment callback.
-		* Adoption cycles (A -> B -> A) are detected and rejected instead of
-		  hanging forever.
+		* Adoption cycles (A -> B -> A) are detected and safely rejected.
 		* Rejections are reported asynchronously when no rejection handler
 		  is attached before the deferred unhandled check.
+		* Destroying a rejected Vow before the deferred check suppresses the report.
+		* Callbacks execute synchronously during resolution, rejection, or when attached to settled Vows.
 		* Vow.all and Vow.race validate every input BEFORE allocating the
 		  aggregate Vow, so a bad input never leaks a slot.
+		* Vows allocate no per-instance tables, but Vow.all generates one table for results.
 		* Because Vows are integer handles, Luau's garbage collector cannot
 		  discover when a settled Vow is no longer needed. Developers MUST
 		  call Vow.destroy(id) when completely finished with a Vow.
@@ -51,9 +53,10 @@
 		* Cancelling an aggregate input cancels the aggregate.
 		* Cancelling an aggregate detaches it from its inputs but never
 		  cancels them, since inputs may be shared.
-		* Awaiters of a cancelled Vow wake with (false, nil).
+		* Awaiters of a cancelled Vow wake with (false, nil). A rejected Vow with
+		  a nil reason also returns (false, nil), making them indistinguishable.
 
-	@version 1.0
+	@version 1.1.0
 	@author checcerr
 	@license MPL-2.0
 ]=]
@@ -61,6 +64,15 @@
 export type Vow = number
 export type Executor = (id: Vow) -> ()
 export type Handler = ((value: any) -> any)?
+export type VowStats = {
+	vowCapacity: number,
+	vowLive: number,
+	vowFree: number,
+	vowRetired: number,
+	nodeCapacity: number,
+	nodeActive: number,
+	nodeFree: number,
+}
 
 -- ============================== tunables ================================
 
@@ -70,8 +82,7 @@ local INITIAL_NODES = 128
 local SLOT_ID_SPACE = 16_777_216
 local GENERATION_SPACE = 268_435_456
 local MAX_HANDLE = GENERATION_SPACE * SLOT_ID_SPACE + (SLOT_ID_SPACE - 1)
-
-local MAX_ADOPTION_DEPTH = 512
+local MAX_NODES = 268_435_455
 
 local STATE_PENDING = 1
 local STATE_RESOLVED = 2
@@ -188,7 +199,6 @@ local function growVowsTo(newCapacity: number)
 	vowAggregateRemaining = growU32(vowAggregateRemaining, vowCapacity, newCapacity)
 	vowAdopts = growU32(vowAdopts, vowCapacity, newCapacity)
 
-	-- We must also preallocate the tables to stop them from resizing
 	local newValues = table.create(newCapacity)
 	local newAggResults = table.create(newCapacity)
 	table.move(vowValues, 1, vowCapacity, 1, newValues)
@@ -230,7 +240,6 @@ end
 local function growVows() growVowsTo(vowCapacity * 2) end
 local function growNodes() growNodesTo(nodeCapacity * 2) end
 
-
 local function acquireVow(): (number, Vow)
 	local id: number
 
@@ -256,17 +265,6 @@ local function acquireVow(): (number, Vow)
 	return id, id + (generation + 1) * SLOT_ID_SPACE
 end
 
---[=[
-	Releases a slot back to the pool.
-
-	ABA protection: a slot's generation counter is finite. Once it would
-	exceed GENERATION_SPACE, an old handle carrying the wrapped generation
-	could alias a brand new Vow living in the same slot. Rather than wrap,
-	the slot is PERMANENTLY RETIRED: its state stays 0 (dead) forever and
-	it is never pushed back into vowFree, so no future Vow can occupy it.
-	Retiring costs one slot out of SLOT_ID_SPACE after 2^28 reuses of that
-	slot, which is a trade worth making against silent memory corruption.
-]=]
 local function releaseVow(id: number): ()
 	local generation = buffer.readu32(vowGens, id * 4) + 1
 
@@ -301,6 +299,10 @@ local function acquireNode(): number
 		nodeFreeLength -= 1
 		id = buffer.readu32(nodeFree, nodeFreeLength * 4)
 	else
+		if nodeCount >= MAX_NODES then
+			error(`Vow.new: Node limit ({MAX_NODES}) reached`, 2)
+		end
+
 		if nodeCount >= nodeCapacity then
 			growNodes()
 		end
@@ -482,6 +484,17 @@ local function unlinkOwner(node: number): ()
 	buffer.writeu32(nodeOwnerNext, node * 4, 0)
 end
 
+local function popSourceHead(source: number): number?
+	local encoded = buffer.readu32(vowHeads, source * 4)
+	if encoded == 0 then
+		return nil
+	end
+
+	local node = encoded - 1
+	unlinkSource(node)
+	return node
+end
+
 local function makeNode(
 	kind: number,
 	source: number,
@@ -512,13 +525,6 @@ local function makeNode(
 	return node
 end
 
---[=[
-	Severs every node this Vow OWNS, i.e. every subscription it holds on
-	some other Vow's listener list. Both directions of every link are
-	cleared before the node returns to the pool, so the source Vows can
-	never walk into a dead node. This is what makes manual resolve/destroy
-	of an aggregate safe: its inputs simply stop knowing about it.
-]=]
 local function detachOwned(owner: number): ()
 	local head = buffer.readu32(vowOwnedHeads, owner * 4)
 
@@ -586,26 +592,32 @@ local function invokeCallback(
 	child: Vow,
 	rejected: boolean
 ): ()
+	if tryDecode(child) == nil then
+		return
+	end
+
+	if callback == nil then
+		local childId = tryDecode(child)
+		if childId == nil then
+			return
+		end
+
+		if rejected then
+			settle(childId, STATE_REJECTED, value)
+		else
+			resolveValue(childId, value)
+		end
+		return
+	end
+
+	local ok, result = pcall(callback :: (any) -> any, value)
 	local childId = tryDecode(child)
 
 	if childId == nil then
 		return
 	end
 
-	if callback == nil then
-		if rejected then
-			settle(childId, STATE_REJECTED, value)
-		else
-			resolveValue(childId, value)
-		end
-
-		return
-	end
-
-	local ok, result = pcall(callback :: (any) -> any, value)
-
 	if ok then
-		-- A Vow returned from a handler is adopted, exactly like resolve.
 		resolveValue(childId, result)
 	else
 		settle(childId, STATE_REJECTED, result)
@@ -616,31 +628,26 @@ local function dispatch(id: number, state: number, value: any): ()
 	local rejected = state == STATE_REJECTED
 	local childState = if rejected then STATE_REJECTED else STATE_RESOLVED
 
-	local head = buffer.readu32(vowHeads, id * 4)
-	buffer.writeu32(vowHeads, id * 4, 0)
-	buffer.writeu32(vowTails, id * 4, 0)
+	while true do
+		local node = popSourceHead(id)
+		if node == nil then
+			break
+		end
 
-	while head ~= 0 do
-		local node = head - 1
 		local slot = node + 1
-		local nextNode = buffer.readu32(nodeNext, node * 4)
-
-		-- Extract values locally
 		local kind = buffer.readu8(nodeKinds, node)
 		local index = buffer.readu32(nodeIndices, node * 4)
 		local child = nodeChildren[slot]
 		local waiting = nodeThreads[slot]
 		local callback = if rejected then nodeRejected[slot] else nodeResolved[slot]
 
-		-- Unlink and release completely before executing
-		buffer.writeu32(nodeSources, node * 4, 0)
-		buffer.writeu32(nodePrevious, node * 4, 0)
-		buffer.writeu32(nodeNext, node * 4, 0)
-
 		unlinkOwner(node)
 		releaseNode(node)
 
-		-- Execute
+		if rejected then
+			buffer.writeu8(vowHandled, id, 1)
+		end
+
 		if kind == NODE_CALLBACK then
 			if child ~= nil then
 				invokeCallback(callback, value, child, rejected)
@@ -661,8 +668,6 @@ local function dispatch(id: number, state: number, value: any): ()
 				aggregateStep(child, childState, value, index)
 			end
 		end
-
-		head = nextNode
 	end
 end
 
@@ -686,6 +691,8 @@ settle = function(id: number, state: number, value: any): ()
 		return
 	end
 
+	local handle = handleOf(id)
+
 	buffer.writeu8(vowStates, id, state)
 	buffer.writeu32(vowAdopts, id * 4, 0)
 	vowValues[id + 1] = value
@@ -694,7 +701,7 @@ settle = function(id: number, state: number, value: any): ()
 	dispatch(id, state, value)
 
 	if state == STATE_REJECTED then
-		task.defer(raiseUnhandled, handleOf(id))
+		task.defer(raiseUnhandled, handle)
 	end
 end
 
@@ -710,22 +717,16 @@ cancelInternal = function(handle: Vow): ()
 
 	detachOwned(id)
 
-	local head = buffer.readu32(vowHeads, id * 4)
-	buffer.writeu32(vowHeads, id * 4, 0)
-	buffer.writeu32(vowTails, id * 4, 0)
+	while true do
+		local node = popSourceHead(id)
+		if node == nil then
+			break
+		end
 
-	while head ~= 0 do
-		local node = head - 1
 		local slot = node + 1
-		local nextNode = buffer.readu32(nodeNext, node * 4)
-
 		local kind = buffer.readu8(nodeKinds, node)
 		local child = nodeChildren[slot]
 		local waiting = nodeThreads[slot]
-
-		buffer.writeu32(nodeSources, node * 4, 0)
-		buffer.writeu32(nodePrevious, node * 4, 0)
-		buffer.writeu32(nodeNext, node * 4, 0)
 
 		unlinkOwner(node)
 		releaseNode(node)
@@ -739,31 +740,21 @@ cancelInternal = function(handle: Vow): ()
 				task.spawn(waiting, false, nil)
 			end
 		end
-
-		head = nextNode
 	end
 end
 
 destroyInternal = function(id: number): ()
 	detachOwned(id)
 
-	local head = buffer.readu32(vowHeads, id * 4)
-	buffer.writeu32(vowHeads, id * 4, 0)
-	buffer.writeu32(vowTails, id * 4, 0)
+	while true do
+		local node = popSourceHead(id)
+		if node == nil then
+			break
+		end
 
-	releaseVow(id)
-
-	while head ~= 0 do
-		local node = head - 1
 		local slot = node + 1
-		local nextNode = buffer.readu32(nodeNext, node * 4)
-
 		local kind = buffer.readu8(nodeKinds, node)
 		local waiting = nodeThreads[slot]
-
-		buffer.writeu32(nodeSources, node * 4, 0)
-		buffer.writeu32(nodePrevious, node * 4, 0)
-		buffer.writeu32(nodeNext, node * 4, 0)
 
 		unlinkOwner(node)
 		releaseNode(node)
@@ -773,41 +764,53 @@ destroyInternal = function(id: number): ()
 				task.spawn(waiting, false, nil)
 			end
 		end
-
-		head = nextNode
 	end
+
+	releaseVow(id)
 end
 
---[=[
-	Walks the adoption chain starting at `adopted` looking for `id`.
-	A -> B -> A is caught here instead of deadlocking both Vows. The
-	depth counter is a belt-and-braces guard against a malformed chain.
-]=]
 local function isAdoptionCycle(id: number, adopted: number): boolean
-	local cursor = adopted
-	local depth = 0
+	local tortoise = adopted
+	local hare = adopted
 
 	while true do
-		if cursor == id then
+		if hare == id then
 			return true
 		end
 
-		local encoded = buffer.readu32(vowAdopts, cursor * 4)
-
-		if encoded == 0 then
+		local enc1 = buffer.readu32(vowAdopts, hare * 4)
+		if enc1 == 0 then
 			return false
 		end
+		hare = enc1 - 1
 
-		cursor = encoded - 1
-		depth += 1
-
-		if depth > MAX_ADOPTION_DEPTH then
+		if hare == id then
 			return true
+		end
+
+		local enc2 = buffer.readu32(vowAdopts, hare * 4)
+		if enc2 == 0 then
+			return false
+		end
+		hare = enc2 - 1
+
+		tortoise = buffer.readu32(vowAdopts, tortoise * 4) - 1
+
+		if hare == tortoise then
+			return false
 		end
 	end
 end
 
 resolveValue = function(id: number, value: any): ()
+	if buffer.readu8(vowStates, id) ~= STATE_PENDING then
+		return
+	end
+
+	if buffer.readu32(vowAdopts, id * 4) ~= 0 then
+		return
+	end
+
 	local adopted = tryDecode(value)
 
 	if adopted == nil then
@@ -825,8 +828,6 @@ resolveValue = function(id: number, value: any): ()
 		return
 	end
 
-	buffer.writeu8(vowHandled, adopted, 1)
-
 	local state = buffer.readu8(vowStates, adopted)
 
 	if state == STATE_PENDING then
@@ -835,36 +836,46 @@ resolveValue = function(id: number, value: any): ()
 	elseif state == STATE_RESOLVED then
 		settle(id, STATE_RESOLVED, vowValues[adopted + 1])
 	elseif state == STATE_REJECTED then
+		buffer.writeu8(vowHandled, adopted, 1)
 		settle(id, STATE_REJECTED, vowValues[adopted + 1])
 	elseif state == STATE_CANCELLED then
 		cancelInternal(handleOf(id))
 	end
 end
 
-local function validateInputs(vows: { Vow }, method: string): number
+local function validateInputs(vows: { Vow }, method: string): ({ Vow }, number)
 	if type(vows) ~= "table" then
 		error(`Vow.{method}: expected an array of Vow handles`, 3)
 	end
 
-	local count = #vows
+	local count = 0
+	local maxIndex = 0
 
-	for index = 1, count do
-		local input = vows[index]
-
-		if input == nil then
-			error(`Vow.{method}: input #{index} is nil (sparse array)`, 3)
+	for key, input in next, vows do
+		if type(key) ~= "number" or key % 1 ~= 0 or key < 1 then
+			error(`Vow.{method}: expected a dense array with integer keys`, 3)
 		end
 
-		if type(input) ~= "number" then
-			error(`Vow.{method}: input #{index} is not a Vow handle`, 3)
+		count += 1
+		if key > maxIndex then
+			maxIndex = key
 		end
 
 		if tryDecode(input) == nil then
-			error(`Vow.{method}: input #{index} is not a live Vow handle`, 3)
+			error(`Vow.{method}: input #{key} is not a live Vow handle`, 3)
 		end
 	end
 
-	return count
+	if count ~= maxIndex then
+		error(`Vow.{method}: sparse arrays are not allowed`, 3)
+	end
+
+	local snapshot = table.create(count)
+	for index = 1, count do
+		snapshot[index] = rawget(vows, index)
+	end
+
+	return snapshot, count
 end
 
 -- ================================= API ==================================
@@ -893,7 +904,11 @@ function Vow.new(executor: Executor): Vow
 
 	if not ok then
 		local currentId = tryDecode(handle)
-		if currentId ~= nil then
+		if
+			currentId ~= nil
+			and buffer.readu8(vowStates, currentId) == STATE_PENDING
+			and buffer.readu32(vowAdopts, currentId * 4) == 0
+		then
 			settle(currentId, STATE_REJECTED, err)
 		end
 	end
@@ -906,7 +921,8 @@ end
 
 	If value is another live Vow, this Vow adopts that Vow's eventual
 	state and value. Direct and indirect adoption cycles reject instead
-	of hanging.
+	of hanging. If the value is a number, it may conflict with live Vow handles;
+	use Vow.resolveRaw to skip this adoption step safely.
 
 	@param id Vow -- the Vow handle to resolve
 	@param value any -- the single fulfillment value or another Vow
@@ -915,6 +931,28 @@ end
 function Vow.resolve(id: Vow, value: any): ()
 	local slot = decode(id, "resolve")
 	resolveValue(slot, value)
+end
+
+--[=[
+	Resolves a pending Vow with one value, strictly bypassing any Vow adoption checks.
+	Use this when your fulfillment value could be an integer matching a Vow handle.
+
+	@param id Vow -- the Vow handle to resolve
+	@param value any -- the raw fulfillment value
+]=]
+@native
+function Vow.resolveRaw(id: Vow, value: any): ()
+	local slot = decode(id, "resolveRaw")
+
+	if buffer.readu8(vowStates, slot) ~= STATE_PENDING then
+		return
+	end
+
+	if buffer.readu32(vowAdopts, slot * 4) ~= 0 then
+		return
+	end
+
+	settle(slot, STATE_RESOLVED, value)
 end
 
 --[=[
@@ -929,6 +967,15 @@ end
 @native
 function Vow.reject(id: Vow, value: any): ()
 	local slot = decode(id, "reject")
+
+	if buffer.readu8(vowStates, slot) ~= STATE_PENDING then
+		return
+	end
+
+	if buffer.readu32(vowAdopts, slot * 4) ~= 0 then
+		return
+	end
+
 	settle(slot, STATE_REJECTED, value)
 end
 
@@ -956,25 +1003,15 @@ function Vow.andThen(id: Vow, onResolved: Handler, onRejected: Handler): Vow
 		error("Vow.andThen: onRejected must be a function or nil", 2)
 	end
 
-	buffer.writeu8(vowHandled, parent, 1)
-
 	local childId, child = acquireVow()
 	local state = buffer.readu8(vowStates, parent)
 
 	if state == STATE_PENDING then
-		makeNode(
-			NODE_CALLBACK,
-			parent,
-			childId,
-			0,
-			onResolved,
-			onRejected,
-			child,
-			nil
-		)
+		makeNode(NODE_CALLBACK, parent, childId, 0, onResolved, onRejected, child, nil)
 	elseif state == STATE_RESOLVED then
 		invokeCallback(onResolved, vowValues[parent + 1], child, false)
 	elseif state == STATE_REJECTED then
+		buffer.writeu8(vowHandled, parent, 1)
 		invokeCallback(onRejected, vowValues[parent + 1], child, true)
 	elseif state == STATE_CANCELLED then
 		cancelInternal(child)
@@ -1025,7 +1062,10 @@ function Vow.await(id: Vow): (boolean, any)
 		return false, nil
 	end
 
-	buffer.writeu8(vowHandled, slot, 1)
+	if not coroutine.isyieldable() then
+		error("Vow.await: cannot await in a non-yieldable thread", 2)
+	end
+
 	makeNode(NODE_AWAIT, slot, nil, 0, nil, nil, nil, coroutine.running())
 
 	return coroutine.yield()
@@ -1052,20 +1092,30 @@ end
 
 	Developers MUST call this when a Vow is completely finished. Settled
 	Vows remain alive and retain their values until explicitly destroyed.
+	Destroying a pending Vow will seamlessly trigger cancellation recursively
+	before destroying it.
 
-	@param id Vow -- the Vow handle to destroy
+	@param handle Vow -- the Vow handle to destroy
 ]=]
-function Vow.destroy(id: Vow): ()
-	local slot = decode(id, "destroy")
+function Vow.destroy(handle: Vow): ()
+	local slot = decode(handle, "destroy")
+
+	if buffer.readu8(vowStates, slot) == STATE_PENDING then
+		cancelInternal(handle)
+		slot = decode(handle, "destroy")
+	end
+
 	destroyInternal(slot)
 end
 
 --[=[
 	Resolves when every Vow in the array resolves.
 
-	The returned array preserves input order. The returned Vow rejects
-	immediately when any input rejects, and is cancelled when any input
-	is cancelled. An empty input resolves with an empty array.
+	The returned array preserves input order. It includes an `n` field
+	for the total count of inputs, enabling safe iteration when values are nil.
+	The returned Vow rejects immediately when any input rejects, and is
+	cancelled when any input is cancelled. An empty input resolves with
+	an empty array.
 
 	Every input is validated BEFORE the aggregate is allocated, so an
 	invalid or sparse array never leaks a Vow slot.
@@ -1074,7 +1124,7 @@ end
 	@return Vow -- aggregate Vow
 ]=]
 function Vow.all(vows: { Vow }): Vow
-	local count = validateInputs(vows, "all")
+	local snapshot, count = validateInputs(vows, "all")
 
 	local parent, result = acquireVow()
 	local results = table.create(count) :: any
@@ -1090,20 +1140,20 @@ function Vow.all(vows: { Vow }): Vow
 	end
 
 	for index = 1, count do
-		local inputId = tryDecode(vows[index])
+		local inputId = tryDecode(snapshot[index])
 
 		if inputId == nil then
 			continue
 		end
 
 		local state = buffer.readu8(vowStates, inputId)
-		buffer.writeu8(vowHandled, inputId, 1)
 
 		if state == STATE_PENDING then
 			makeNode(NODE_AGGREGATE, inputId, parent, index, nil, nil, result, nil)
 		elseif state == STATE_RESOLVED then
 			aggregateStep(result, STATE_RESOLVED, vowValues[inputId + 1], index)
 		elseif state == STATE_REJECTED then
+			buffer.writeu8(vowHandled, inputId, 1)
 			aggregateStep(result, STATE_REJECTED, vowValues[inputId + 1], index)
 			break
 		elseif state == STATE_CANCELLED then
@@ -1128,21 +1178,20 @@ end
 	@return Vow -- race Vow
 ]=]
 function Vow.race(vows: { Vow }): Vow
-	local count = validateInputs(vows, "race")
+	local snapshot, count = validateInputs(vows, "race")
 
 	local parent, result = acquireVow()
 
 	buffer.writeu8(vowAggregateModes, parent, AGG_RACE)
 
 	for index = 1, count do
-		local inputId = tryDecode(vows[index])
+		local inputId = tryDecode(snapshot[index])
 
 		if inputId == nil then
 			continue
 		end
 
 		local state = buffer.readu8(vowStates, inputId)
-		buffer.writeu8(vowHandled, inputId, 1)
 
 		if state == STATE_PENDING then
 			makeNode(NODE_AGGREGATE, inputId, parent, index, nil, nil, result, nil)
@@ -1150,6 +1199,7 @@ function Vow.race(vows: { Vow }): Vow
 			settle(parent, STATE_RESOLVED, vowValues[inputId + 1])
 			break
 		elseif state == STATE_REJECTED then
+			buffer.writeu8(vowHandled, inputId, 1)
 			settle(parent, STATE_REJECTED, vowValues[inputId + 1])
 			break
 		elseif state == STATE_CANCELLED then
@@ -1173,15 +1223,20 @@ function Vow.isAlive(id: Vow): boolean
 end
 
 --[=[
-	Diagnostics for pool pressure and permanently retired slots.
+	Diagnostics for pool pressure and live counts.
 
-	@return number -- allocated Vow slots
-	@return number -- free Vow slots
-	@return number -- slots retired by generation exhaustion
-	@return number -- allocated listener nodes
+	@return VowStats
 ]=]
-function Vow.stats(): (number, number, number, number)
-	return vowCount, vowFreeLength, vowRetired, nodeCount
+function Vow.stats(): VowStats
+	return {
+		vowCapacity = vowCapacity,
+		vowLive = vowCount - vowFreeLength - vowRetired,
+		vowFree = vowFreeLength,
+		vowRetired = vowRetired,
+		nodeCapacity = nodeCapacity,
+		nodeActive = nodeCount - nodeFreeLength,
+		nodeFree = nodeFreeLength,
+	}
 end
 
 --[=[
@@ -1189,6 +1244,22 @@ end
 	Use this at server startup if you know you will need a massive amount of Vows.
 ]=]
 function Vow.reserve(vows: number, nodes: number)
+	if type(vows) ~= "number" or vows < 0 or vows % 1 ~= 0 then
+		error("Vow.reserve: vows must be a non-negative integer", 2)
+	end
+
+	if type(nodes) ~= "number" or nodes < 0 or nodes % 1 ~= 0 then
+		error("Vow.reserve: nodes must be a non-negative integer", 2)
+	end
+
+	if vows > SLOT_ID_SPACE then
+		error(`Vow.reserve: vows cannot exceed the maximum slot limit ({SLOT_ID_SPACE})`, 2)
+	end
+
+	if nodes > MAX_NODES then
+		error(`Vow.reserve: nodes cannot exceed the maximum node limit ({MAX_NODES})`, 2)
+	end
+
 	if vows > vowCapacity then growVowsTo(vows) end
 	if nodes > nodeCapacity then growNodesTo(nodes) end
 end
@@ -1196,5 +1267,3 @@ end
 table.freeze(Vow)
 
 return Vow
-
--- checcerr.
