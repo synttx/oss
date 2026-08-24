@@ -1,12 +1,14 @@
 {
     "name": "oss",
     "tree": {
+        "$className": "Folder",
         "packages": {
+            "$className": "Folder",
             "scythe": {
-                "$path": "packages/scythe"
+                "$path": "packages/scythe/default.project.json"
             },
             "vow": {
-                "$path": "packages/vow"
+                "$path": "packages/vow/default.project.json"
             }
         }
     }

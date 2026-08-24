@@ -6,7 +6,7 @@ authors = ["synttx <synttx@proton.me>"]
 realm = "shared"
 license = "MPL-2.0"
 registry = "https://github.com/UpliftGames/wally-index"
-repository = "https://github.com/synttx/oss/tree/main/scythe"
+repository = "https://github.com/synttx/oss/tree/main/packages/scythe"
 keywords = ["janitor", "maid", "cleanup", "trove"]
 exclude = [
     "assets",
