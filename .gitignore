@@ -1,1 +1,6 @@
 temp
+luau_packages
+Packages
+*.tar.gz
+*.rbxm
+.pesde

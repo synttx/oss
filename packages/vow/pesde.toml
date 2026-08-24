@@ -1,0 +1,21 @@
+name = "synttx/vow"
+version = "1.0.1"
+description = "A Data-Oriented Procedural Promise/Future Library · ×6 faster. ×32 lighter. ×∞ less garbage."
+authors = ["synttx <synttx@proton.me>"]
+license = "MPL-2.0"
+repository = "https://github.com/synttx/oss/tree/main/packages/vow"
+
+includes = [
+    "pesde.toml",
+    "README.md",
+    "LICENSE",
+    "src/**",
+]
+
+[target]
+environment = "roblox"
+lib = "src/vow.luau"
+build_files = ["src"]
+
+[indices]
+default = "https://github.com/pesde-pkg/index"

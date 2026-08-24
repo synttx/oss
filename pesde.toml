@@ -1,0 +1,11 @@
+name = "synttx/oss"
+version = "0.0.0"
+private = true
+
+workspace_members = ["packages/*"]
+
+[target]
+environment = "roblox"
+
+[indices]
+default = "https://github.com/pesde-pkg/index"
