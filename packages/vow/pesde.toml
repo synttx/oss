@@ -1,5 +1,5 @@
 name = "synttx/vow"
-version = "1.0.1"
+version = "1.0.2"
 description = "A Data-Oriented Procedural Promise/Future Library · ×6 faster. ×32 lighter. ×∞ less garbage."
 authors = ["synttx <synttx@proton.me>"]
 license = "MPL-2.0"
